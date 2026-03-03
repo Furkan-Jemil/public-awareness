@@ -1,0 +1,161 @@
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { DATABASE_CONNECTION } from '../../database/database.module';
+import { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import * as schema from '../../database/schema';
+import { CreateReportDto } from './dto/create-report.dto';
+import { UpdateReportDto } from './dto/update-report.dto';
+import { GetReportsFilterDto, SortOption } from './dto/get-reports-filter.dto';
+import { eq, and, sql, desc } from 'drizzle-orm';
+
+@Injectable()
+export class ReportsService {
+  constructor(
+    @Inject(DATABASE_CONNECTION)
+    private readonly db: NodePgDatabase<typeof schema>,
+  ) {}
+
+  async create(createReportDto: CreateReportDto, reporterId: string) {
+    const [report] = await this.db
+      .insert(schema.reports)
+      .values({
+        ...createReportDto,
+        reporterId,
+      })
+      .returning();
+
+    return report;
+  }
+
+  async findAll(filters: GetReportsFilterDto) {
+    const {
+      city,
+      area,
+      category,
+      urgency,
+      status,
+      search,
+      sort,
+      page = 1,
+      limit = 20,
+    } = filters;
+    const offset = (page - 1) * limit;
+
+    const queryFilters = [];
+
+    if (city) queryFilters.push(eq(schema.reports.cityId, city));
+    if (area) queryFilters.push(eq(schema.reports.areaId, area));
+    if (category) queryFilters.push(eq(schema.reports.categoryId, category));
+    if (urgency)
+      queryFilters.push(eq(schema.reports.urgencyLevel, urgency as any));
+    if (status) queryFilters.push(eq(schema.reports.status, status as any));
+
+    // GIN Full-Text Search
+    if (search) {
+      const searchTerms = search.trim().split(' ').join(' | '); // Convert to tsquery syntax
+      queryFilters.push(
+        sql`${schema.reports.searchVector} @@ to_tsquery('english', ${searchTerms})`,
+      );
+    }
+
+    let orderByClause;
+    if (sort === SortOption.URGENT) {
+      // SQL mapping: critical > warning > info
+      orderByClause = sql`
+        CASE ${schema.reports.urgencyLevel}
+          WHEN 'critical' THEN 1
+          WHEN 'warning' THEN 2
+          WHEN 'info' THEN 3
+          ELSE 4
+        END ASC, ${schema.reports.createdAt} DESC
+       `;
+    } else if (sort === SortOption.CONFIDENCE) {
+      orderByClause = desc(schema.reports.confidenceScore);
+    } else {
+      // Default SortOption.RECENT
+      orderByClause = desc(schema.reports.createdAt);
+    }
+
+    const data = await this.db.query.reports.findMany({
+      where: queryFilters.length > 0 ? and(...queryFilters) : undefined,
+      orderBy: orderByClause,
+      limit,
+      offset,
+      with: {
+        category: true,
+        city: true,
+        area: true,
+        reporter: {
+          columns: {
+            id: true,
+            displayName: true,
+            trustScore: true,
+          },
+        },
+        media: true,
+      },
+    });
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+      },
+    };
+  }
+
+  async findOne(id: string) {
+    const report = await this.db.query.reports.findFirst({
+      where: eq(schema.reports.id, id),
+      with: {
+        category: true,
+        city: true,
+        area: true,
+        media: true,
+        reporter: {
+          columns: {
+            id: true,
+            displayName: true,
+            trustScore: true,
+          },
+        },
+      },
+    });
+
+    if (!report) {
+      throw new NotFoundException(`Report with ID ${id} not found`);
+    }
+
+    return report;
+  }
+
+  async update(id: string, updateReportDto: UpdateReportDto) {
+    const [updatedReport] = await this.db
+      .update(schema.reports)
+      .set({
+        ...updateReportDto,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.reports.id, id))
+      .returning();
+
+    if (!updatedReport) {
+      throw new NotFoundException(`Report with ID ${id} not found`);
+    }
+
+    return updatedReport;
+  }
+
+  async remove(id: string) {
+    const [deletedReport] = await this.db
+      .delete(schema.reports)
+      .where(eq(schema.reports.id, id))
+      .returning({ id: schema.reports.id });
+
+    if (!deletedReport) {
+      throw new NotFoundException(`Report with ID ${id} not found`);
+    }
+
+    return { message: 'Report deleted successfully', id: deletedReport.id };
+  }
+}
