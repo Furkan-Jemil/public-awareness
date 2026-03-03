@@ -14,6 +14,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ReportsService } from './reports.service';
 import { CreateReportDto } from './dto/create-report.dto';
+import { CreateReactionDto } from './dto/create-reaction.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
 import { GetReportsFilterDto } from './dto/get-reports-filter.dto';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
@@ -58,6 +59,28 @@ export class ReportsController {
   @ApiResponse({ status: 404, description: 'Report not found.' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.reportsService.findOne(id);
+  }
+
+  @Post(':id/react')
+  @ApiOperation({ summary: 'Submit a new reaction to a report' })
+  @ApiParam({ name: 'id', description: 'UUID of the report' })
+  @ApiResponse({
+    status: 201,
+    description: 'The reaction has been submitted successfully.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'User has already reacted to this report.',
+  })
+  react(
+    @Request() req: { user?: { id: string } },
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() reactionDto: CreateReactionDto,
+  ) {
+    // Expected to be populated by JwtAuthGuard
+    const reporterId: string =
+      req.user?.id || '00000000-0000-0000-0000-000000000001';
+    return this.reportsService.reactToReport(id, reporterId, reactionDto);
   }
 
   @Patch(':id')

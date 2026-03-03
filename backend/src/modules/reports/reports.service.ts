@@ -3,9 +3,11 @@ import { DATABASE_CONNECTION } from '../../database/database.module';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../../database/schema';
 import { CreateReportDto } from './dto/create-report.dto';
+import { CreateReactionDto, ReactionType } from './dto/create-reaction.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
 import { GetReportsFilterDto, SortOption } from './dto/get-reports-filter.dto';
 import { eq, and, sql, desc } from 'drizzle-orm';
+import { ConflictException } from '@nestjs/common';
 
 @Injectable()
 export class ReportsService {
@@ -182,6 +184,122 @@ export class ReportsService {
     }
 
     return updatedReport;
+  }
+
+  async reactToReport(
+    reportId: string,
+    userId: string,
+    reactionDto: CreateReactionDto,
+  ) {
+    const isFake = reactionDto.vote === ReactionType.FAKE;
+
+    try {
+      return await this.db.transaction(async (tx) => {
+        // 1. Check if report exists
+        const report = await tx.query.reports.findFirst({
+          where: eq(schema.reports.id, reportId),
+          with: {
+            reporter: {
+              columns: {
+                id: true,
+                trustScore: true,
+              },
+            },
+          },
+        });
+
+        if (!report) {
+          throw new NotFoundException(`Report with ID ${reportId} not found`);
+        }
+
+        // 2. Insert reaction FIRST securely
+        // Leverages Postgres unique_violation immediately to prevent TOCTOU duplicate races
+        try {
+          await tx.insert(schema.reactions).values({
+            reportId,
+            userId,
+            isFake,
+          });
+        } catch (error: any) {
+          if (error.code === '23505') {
+            throw new ConflictException(
+              'User has already reacted to this report.',
+            );
+          }
+          throw error;
+        }
+
+        // 4. Calculate new confidence score dynamically
+        let confidenceDelta = isFake ? -5 : 5; // Base impact
+
+        // Factor in Reporter Trust Score
+        const reporterTrustScore = report.reporter?.trustScore || 50;
+        if (reporterTrustScore > 80) {
+          confidenceDelta += isFake ? -2 : 2; // High trust users have more stable initial score
+        } else if (reporterTrustScore < 30) {
+          confidenceDelta += isFake ? -10 : 0; // Low trust users drop very fast on fake votes
+        }
+
+        // 5. Update Report Atomically (Prevents Read-Modify-Write Race Conditions)
+        const [updatedReport] = await tx
+          .update(schema.reports)
+          .set({
+            reportsVotes: sql`${schema.reports.reportsVotes} + 1`,
+            confidenceScore: sql`${schema.reports.confidenceScore} + ${confidenceDelta}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.reports.id, reportId))
+          .returning();
+
+        const newConfidenceScore = updatedReport.confidenceScore;
+        const oldConfidenceScore = report.confidenceScore;
+
+        // 6. Conditionally update reporter's trustScore ONLY when crossing the thresholds
+        if (
+          oldConfidenceScore >= -50 &&
+          newConfidenceScore < -50 &&
+          reporterTrustScore > 0
+        ) {
+          await tx
+            .update(schema.users)
+            .set({
+              trustScore: sql`GREATEST(${schema.users.trustScore} - 10, 0)`,
+            })
+            .where(eq(schema.users.id, report.reporterId));
+        } else if (
+          oldConfidenceScore <= 50 &&
+          newConfidenceScore > 50 &&
+          reporterTrustScore < 100
+        ) {
+          await tx
+            .update(schema.users)
+            .set({
+              trustScore: sql`LEAST(${schema.users.trustScore} + 1, 100)`,
+            })
+            .where(eq(schema.users.id, report.reporterId));
+        }
+
+        return {
+          message: 'Reaction submitted successfully',
+          newConfidenceScore,
+        };
+      });
+    } catch (error: unknown) {
+      if (
+        error instanceof ConflictException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+
+      // Handle potential Drizzle/Postgres unique constraint throws just in case
+      // standard code for Postgres unique violation is '23505'
+      if ((error as any)?.code === '23505') {
+        throw new ConflictException('User has already reacted to this report.');
+      }
+
+      throw error;
+    }
   }
 
   async remove(id: string) {
