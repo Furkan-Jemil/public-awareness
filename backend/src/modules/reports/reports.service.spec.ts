@@ -29,6 +29,9 @@ describe('ReportsService', () => {
         reactions: {
           findFirst: jest.fn(),
         },
+        users: {
+          findFirst: jest.fn(),
+        },
       },
     };
 
@@ -76,6 +79,12 @@ describe('ReportsService', () => {
 
       const reporterId = 'user-uuid';
       const mockReportId = 'new-report-uuid';
+
+      // Mock user not banned
+      mockTx.query.users.findFirst.mockResolvedValueOnce({
+        id: reporterId,
+        isBanned: false,
+      });
 
       // Mock the first insert (report) return value
       mockTx.returning.mockResolvedValueOnce([
@@ -148,6 +157,12 @@ describe('ReportsService', () => {
 
       const reporterId = 'user-uuid';
       const mockReportId = 'new-report-uuid';
+
+      // Mock user not banned
+      mockTx.query.users.findFirst.mockResolvedValueOnce({
+        id: reporterId,
+        isBanned: false,
+      });
 
       // Report insert succeeds
       mockTx.returning.mockResolvedValueOnce([{ id: mockReportId }]);

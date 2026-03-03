@@ -7,7 +7,7 @@ import { CreateReactionDto, ReactionType } from './dto/create-reaction.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
 import { GetReportsFilterDto, SortOption } from './dto/get-reports-filter.dto';
 import { eq, and, sql, desc } from 'drizzle-orm';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 
 @Injectable()
 export class ReportsService {
@@ -20,6 +20,19 @@ export class ReportsService {
     const { media, ...reportData } = createReportDto;
 
     return await this.db.transaction(async (tx) => {
+      // 0. Security Check: Prevent banned users from participating
+      const user = await tx.query.users.findFirst({
+        where: eq(schema.users.id, reporterId),
+      });
+
+      if (!user) {
+        throw new NotFoundException('Reporter user not found');
+      }
+
+      if (user.isBanned) {
+        throw new ForbiddenException('Banned users are not permitted to create reports');
+      }
+
       // 1. Create the report
       const [report] = await tx
         .insert(schema.reports)
