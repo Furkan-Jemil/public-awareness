@@ -6,6 +6,7 @@ import {
   UrgencyLevel,
   MediaType,
 } from './dto/create-report.dto';
+import { ReactionType } from './dto/create-reaction.dto';
 
 describe('ReportsService', () => {
   let service: ReportsService;
@@ -18,6 +19,17 @@ describe('ReportsService', () => {
       insert: jest.fn().mockReturnThis(),
       values: jest.fn().mockReturnThis(),
       returning: jest.fn(),
+      update: jest.fn().mockImplementation(() => mockTx),
+      set: jest.fn().mockImplementation(() => mockTx),
+      where: jest.fn().mockImplementation(() => mockTx),
+      query: {
+        reports: {
+          findFirst: jest.fn(),
+        },
+        reactions: {
+          findFirst: jest.fn(),
+        },
+      },
     };
 
     // Mock the main database client
@@ -147,6 +159,81 @@ describe('ReportsService', () => {
       await expect(service.create(createDto, reporterId)).rejects.toThrow(
         'Media insertion error',
       );
+    });
+  });
+
+  describe('reactToReport', () => {
+    const mockReportId = 'rep-uuid';
+    const mockUserId = 'usr-uuid';
+    const mockReporterId = 'reporter-uuid';
+
+    it('submits a real reaction and increases confidence', async () => {
+      // Setup mock report without existing reaction
+      mockTx.query.reports.findFirst = jest.fn().mockResolvedValueOnce({
+        id: mockReportId,
+        reporterId: mockReporterId,
+        reportsVotes: 10,
+        confidenceScore: 20,
+        reporter: { id: mockReporterId, trustScore: 50 },
+      });
+      mockTx.insert.mockClear();
+      mockTx.update.mockClear();
+      mockTx.set.mockClear();
+      mockTx.returning = jest
+        .fn()
+        .mockResolvedValueOnce([{ confidenceScore: 25 }]);
+
+      const result = await service.reactToReport(mockReportId, mockUserId, {
+        vote: ReactionType.REAL,
+      });
+
+      expect(mockTx.insert).toHaveBeenCalled();
+      expect(result.newConfidenceScore).toBe(25); // 20 + 5 (base real vote delta)
+    });
+
+    it('rejects duplicate reactions with ConflictException', async () => {
+      // Setup mock report with existing reaction found
+      mockTx.query.reports.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce({ id: mockReportId });
+
+      const duplicateError: any = new Error('Duplicate');
+      duplicateError.code = '23505';
+
+      mockTx.insert.mockReturnValueOnce({
+        values: jest.fn().mockRejectedValueOnce(duplicateError),
+      });
+
+      await expect(
+        service.reactToReport(mockReportId, mockUserId, {
+          vote: ReactionType.REAL,
+        }),
+      ).rejects.toThrow('User has already reacted to this report');
+    });
+
+    it('drops reporter trust score heavily on fake votes if trust is low and crosses -50', async () => {
+      mockTx.query.reports.findFirst = jest.fn().mockResolvedValueOnce({
+        id: mockReportId,
+        reporterId: mockReporterId,
+        reportsVotes: 5,
+        confidenceScore: -40, // Base old confidence
+        reporter: { id: mockReporterId, trustScore: 20 }, // Low trust reporter
+      });
+      mockTx.insert.mockClear();
+      mockTx.update.mockClear();
+      mockTx.set.mockClear();
+      mockTx.returning = jest
+        .fn()
+        .mockResolvedValueOnce([{ confidenceScore: -55 }]);
+
+      const result = await service.reactToReport(mockReportId, mockUserId, {
+        vote: ReactionType.FAKE,
+      });
+
+      expect(result.newConfidenceScore).toBe(-55);
+
+      // Verify that user trust score drop was triggered since confidence crossed -50 (was -40, now -55)
+      expect(mockTx.update).toHaveBeenCalledTimes(2); // One for report, one for user
     });
   });
 });
