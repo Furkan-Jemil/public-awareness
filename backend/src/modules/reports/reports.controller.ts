@@ -8,7 +8,10 @@ import {
   Delete,
   Query,
   ParseUUIDPipe,
+  Request,
+  UseGuards,
 } from '@nestjs/common';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ReportsService } from './reports.service';
 import { CreateReportDto } from './dto/create-report.dto';
 import { UpdateReportDto } from './dto/update-report.dto';
@@ -17,6 +20,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 
 @ApiTags('Reports')
 @Controller('reports')
+@UseGuards(JwtAuthGuard)
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
@@ -27,10 +31,15 @@ export class ReportsController {
     description: 'The report has been successfully created.',
   })
   @ApiResponse({ status: 400, description: 'Validation failed.' })
-  create(@Body() createReportDto: CreateReportDto) {
-    // TODO: Extract reporterId from JWT AuthGuard payload
-    const mockReporterId = '00000000-0000-0000-0000-000000000001';
-    return this.reportsService.create(createReportDto, mockReporterId);
+  create(
+    @Request() req: { user?: { id: string } },
+    @Body() createReportDto: CreateReportDto,
+  ) {
+    // Expected to be populated by JwtAuthGuard
+
+    const reporterId: string =
+      req.user?.id || '00000000-0000-0000-0000-000000000001';
+    return this.reportsService.create(createReportDto, reporterId);
   }
 
   @Get()
