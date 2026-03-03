@@ -27,9 +27,10 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     // Mocking the user payload
+    const roleHeader = request.headers['x-mock-role'] as string;
     request['user'] = {
       id: '00000000-0000-0000-0000-000000000001',
-      role: 'user',
+      role: roleHeader || 'user',
     };
 
     return true;
