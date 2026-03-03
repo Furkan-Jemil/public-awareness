@@ -14,6 +14,7 @@ import { cities, areas } from './regions';
 import { categories } from './categories';
 import { media } from './media';
 import { reactions } from './interactions';
+import { moderationReports } from './moderation';
 
 // Custom type for tsvector since Drizzle's pg-core doesn't have it natively yet
 const tsvector = customType<{ data: string }>({
@@ -97,4 +98,5 @@ export const reportsRelations = relations(reports, ({ one, many }) => ({
   }),
   media: many(media),
   reactions: many(reactions),
+  moderationReports: many(moderationReports),
 }));

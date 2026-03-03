@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { ModerationModule } from './modules/moderation/moderation.module';
 import { ConfigModule } from './config/config.module';
 import { CommonModule } from './common/common.module';
 import { DatabaseModule } from './database/database.module';
@@ -16,6 +17,7 @@ import { DatabaseModule } from './database/database.module';
     AuthModule,
     UsersModule,
     ReportsModule,
+    ModerationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
